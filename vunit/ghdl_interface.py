@@ -39,6 +39,7 @@ class GHDLInterface(SimulatorInterface):
     sim_options = [
         ListOfStringOption("ghdl.sim_flags"),
         ListOfStringOption("ghdl.elab_flags"),
+        ListOfStringOption("ghdl.gtkwave_flags"),
     ]
 
     @staticmethod
@@ -246,7 +247,9 @@ class GHDLInterface(SimulatorInterface):
             status = False
 
         if self._gui and not elaborate_only:
-            cmd = ["gtkwave"] + shlex.split(self._gtkwave_args) + [data_file_name]
+            gtkwave_args = config.sim_options.get('ghdl.gtkwave_flags', [])
+            gcmd = ["gtkwave"] + gtkwave_args + shlex.split(self._gtkwave_args)
+            gcmd += [data_file_name]
             stdout.write("%s\n" % " ".join(cmd))
             subprocess.call(cmd)
 

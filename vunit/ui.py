@@ -191,6 +191,11 @@ The following simulation options are known.
    Extra simulation flags passed to ``ghdl --elab-run``.
    Must be a list of strings.
 
+``ghdl.gtkwave_flags``
+   Extra flags passed to ``gtkwave`` in gui mode. This can be used to specify
+   different flags (e.g. a savefile) for each testcase.
+   Must be a list of strings.
+
 .. |compile_option| replace::
    The name of the compile option (See :ref:`Compilation options <compile_options>`)
 
