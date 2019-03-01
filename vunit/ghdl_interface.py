@@ -14,6 +14,7 @@ from os.path import exists, join
 import os
 import subprocess
 import shlex
+import time
 from sys import stdout  # To avoid output catched in non-verbose mode
 from vunit.ostools import Process
 from vunit.simulator_interface import (SimulatorInterface,
@@ -242,15 +243,31 @@ class GHDLInterface(SimulatorInterface):
         status = True
         try:
             proc = Process(cmd)
-            proc.consume_output()
         except Process.NonZeroExitCode:
             status = False
 
+        # wait for the file to become available, otherwise gtkwave exits
+        if self._gui and data_file_name is not None:
+            while proc.is_alive() and not (exists(data_file_name) and os.stat(data_file_name).st_size > 0):
+                time.sleep(0.05)
+
+        gtkwave = None
         if self._gui and not elaborate_only:
             gtkwave_args = config.sim_options.get('ghdl.gtkwave_flags', [])
             gcmd = ["gtkwave"] + gtkwave_args + shlex.split(self._gtkwave_args)
             gcmd += [data_file_name]
             stdout.write("%s\n" % " ".join(cmd))
-            subprocess.call(cmd)
+            gtkwave = Process(gcmd)
+
+        try:
+            proc.consume_output()
+        except Process.NonZeroExitCode:
+            status = False
+
+        if gtkwave is not None:
+            try:
+                gtkwave.consume_output()
+            except Process.NonZeroExitCode:
+                pass
 
         return status
