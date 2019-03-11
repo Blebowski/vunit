@@ -208,6 +208,94 @@ class GHDLInterface(SimulatorInterface):
             cmd += ["--ieee-asserts=disable"]
         return cmd
 
+    def start_gtkwave(self, gcmd, sim_proc, data_file_name):
+        """
+        Start gtkwave and ensure it really starts.
+
+        The goal: launch gtkwave as soon as possible.
+        The problem: when the GHW dump file has not yet the header
+                     completely written, gtkwave will exit with error.
+        The solution: If that happens, wait until more is written to the
+                      GHW file, restart gtkwave and monitor is for 1 sec.
+                      If the simulation process ends, give gtkwave one more
+                      chance, then stop trying.
+        """
+
+        WillSurvive = 'WillSurvive'
+        WaitForGHWSizeChange = 'WaitForGHWSizeChange'
+        StartGtkwave = 'StartGtkwave'
+        Success = 'Success'
+        Failure = 'Failure'
+
+        WILL_SURVIVE_WATCH_TIME = 1.0
+
+        # WaitForGHWSizeChange
+        last_ghw_size = 0
+
+        # WillSurvive
+        survive_time_threshold = None
+
+        # StartGtkwave
+        max_nrestarts = 10000
+
+        state = WaitForGHWSizeChange
+        log = logging.getLogger('vunit.ghdl.gtkwave')
+        while True:
+            log.debug('state = {}'.format(state))
+            wait = True
+            if state == WaitForGHWSizeChange:
+                size = os.stat(data_file_name).st_size if exists(data_file_name) else -1
+                log.debug('  GHW size = {}, last_ghw_size = {}'.format(size, last_ghw_size))
+                if size > last_ghw_size:
+                    last_ghw_size = size
+                    state = StartGtkwave
+                elif not sim_proc.is_alive():
+                    # This should not happen. Probably GHDL error.
+                    # So as not to fall into an endless loop, try it once more
+                    # and then give up.
+                    log.debug("  Simulator process not alive (and GHW size "
+                              "did not change sice last time). Will give it "
+                              "no more than one extra try.")
+                    max_nrestarts = min(max_nrestarts, 1)
+                    state = StartGtkwave
+            elif state == StartGtkwave:
+                log.debug('  max_nrestarts = {}'.format(max_nrestarts))
+                if max_nrestarts <= 0:
+                    state = Failure
+                else:
+                    gtkwave = Process(gcmd)
+                    state = WillSurvive
+                    survive_time_threshold = time.time() + WILL_SURVIVE_WATCH_TIME
+                    wait = False
+                    max_nrestarts -= 1
+            elif state == WillSurvive:
+                now = time.time()
+                log.debug('  remaining survival time = {:.1f} sec'.format(survive_time_threshold - now))
+                if now >= survive_time_threshold:
+                    log.debug('  Survived.')
+                    state = Success
+                else:
+                    if not gtkwave.is_alive():
+                        try:
+                            gtkwave.consume_output()
+                        except Process.NonZeroExitCode:
+                            log.debug('  Gtkwave died. Will retry.')
+                            state = WaitForGHWSizeChange
+                        else:
+                            log.debug('  Gtkwave exited successfully.')
+                            state = Success  # user exit
+                    if not sim_proc.is_alive():
+                        log.debug('  Simulator process ended. Will give it no more than one extra try.')
+                        max_nrestarts = min(max_nrestarts, 1)
+            else:
+                break
+            if wait:
+                time.sleep(0.05)
+        if state == Success:
+            return gtkwave
+        else:
+            return None
+
     def simulate(self,  # pylint: disable=too-many-locals
                  output_path,
                  test_suite_name,
@@ -246,18 +334,13 @@ class GHDLInterface(SimulatorInterface):
         except Process.NonZeroExitCode:
             status = False
 
-        # wait for the file to become available, otherwise gtkwave exits
-        if self._gui and data_file_name is not None:
-            while proc.is_alive() and not (exists(data_file_name) and os.stat(data_file_name).st_size > 0):
-                time.sleep(0.05)
-
         gtkwave = None
         if self._gui and not elaborate_only:
             gtkwave_args = config.sim_options.get('ghdl.gtkwave_flags', [])
             gcmd = ["gtkwave"] + gtkwave_args + shlex.split(self._gtkwave_args)
             gcmd += [data_file_name]
-            stdout.write("%s\n" % " ".join(cmd))
-            gtkwave = Process(gcmd)
+            stdout.write("%s\n" % " ".join(gcmd))
+            gtkwave = self.start_gtkwave(gcmd, proc, data_file_name)
 
         try:
             proc.consume_output()
